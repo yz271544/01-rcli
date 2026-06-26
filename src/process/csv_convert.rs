@@ -7,6 +7,7 @@ use crate::cli::OutputFormat;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]
+#[allow(dead_code)]
 struct Player {
     name: String,
     position: String,

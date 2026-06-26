@@ -18,7 +18,7 @@ pub struct Opts {
 }
 
 #[derive(Debug, Parser)]
-#[enum_dispatch(CmdExector)]
+#[enum_dispatch(CmdExecutor)]
 pub enum SubCommand {
     #[command(name = "csv", about = "Show CSV, or convert CSV to other formats")]
     Csv(CsvOpts),
