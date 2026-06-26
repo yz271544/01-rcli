@@ -7,10 +7,10 @@ pub struct GenPassOpts {
     #[arg(short, long, default_value_t = 16)]
     pub length: u8,
 
-    #[arg(long, default_value_t = true)]
+    #[arg(long = "no-uppercase", action = clap::ArgAction::SetFalse)]
     pub uppercase: bool,
 
-    #[arg(long, default_value_t = true)]
+    #[arg(long = "no-lowercase", action = clap::ArgAction::SetFalse)]
     pub lowercase: bool,
 
     #[arg(long = "no-number", action = clap::ArgAction::SetFalse)]

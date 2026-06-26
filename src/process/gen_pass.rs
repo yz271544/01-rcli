@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use rand::seq::SliceRandom;
 
 const UPPER: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -18,25 +19,29 @@ pub fn process_genpass(
 
     if upper {
         chars.extend_from_slice(UPPER);
-        password.push(*UPPER.choose(&mut rng).expect("UPPER won't be empty"));
+        password.push(*UPPER.choose(&mut rng).expect("UPPER is non-empty"));
     }
     if lower {
         chars.extend_from_slice(LOWER);
-        password.push(*LOWER.choose(&mut rng).expect("LOWER won't be empty"));
+        password.push(*LOWER.choose(&mut rng).expect("LOWER is non-empty"));
     }
     if number {
         chars.extend_from_slice(NUMBER);
-        password.push(*NUMBER.choose(&mut rng).expect("NUMBER won't be empty"));
+        password.push(*NUMBER.choose(&mut rng).expect("NUMBER is non-empty"));
     }
     if symbol {
         chars.extend_from_slice(SYMBOL);
-        password.push(*SYMBOL.choose(&mut rng).expect("SYMBOL won't be empty"));
+        password.push(*SYMBOL.choose(&mut rng).expect("SYMBOL is non-empty"));
+    }
+
+    if chars.is_empty() {
+        return Err(anyhow!("at least one character set must be enabled"));
     }
 
     for _ in 0..(length - password.len() as u8) {
         let c = chars
             .choose(&mut rng)
-            .expect("chars won't be empty in this context");
+            .ok_or_else(|| anyhow!("no characters available to sample"))?;
         password.push(*c);
     }
 
