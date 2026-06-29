@@ -1,16 +1,8 @@
 use anyhow::Result;
-use axum::{
-    body::Body,
-    extract::{Path, State},
-    http::StatusCode,
-    response::Response,
-    routing::get,
-    Router,
-};
-use std::{net::SocketAddr, path::Path as StdPath, path::PathBuf, sync::Arc};
+use axum::{body::Body, http::StatusCode, response::Response};
+use std::{net::SocketAddr, path::Path as StdPath, path::PathBuf};
 use tokio_util::io::ReaderStream;
-use tower_http::services::ServeDir;
-use tracing::{info, warn};
+use tracing::info;
 
 #[allow(dead_code)]
 fn human_size(bytes: u64) -> String {
@@ -80,6 +72,19 @@ impl From<std::io::Error> for ServeError {
     }
 }
 
+impl axum::response::IntoResponse for ServeError {
+    fn into_response(self) -> axum::response::Response {
+        use axum::http::StatusCode;
+        let (status, msg) = match self {
+            ServeError::NotFound => (StatusCode::NOT_FOUND, "Not Found"),
+            ServeError::Forbidden => (StatusCode::FORBIDDEN, "Forbidden"),
+            ServeError::BadRequest => (StatusCode::BAD_REQUEST, "Bad Request"),
+            ServeError::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
+        };
+        (status, msg).into_response()
+    }
+}
+
 #[allow(dead_code)]
 fn safe_join(root: &StdPath, rel: &str) -> Result<PathBuf, ServeError> {
     let candidate = if rel.is_empty() || rel == "." {
@@ -111,6 +116,44 @@ fn safe_join(root: &StdPath, rel: &str) -> Result<PathBuf, ServeError> {
     }
     // Path is confirmed safe; canonicalize to resolve symlinks and return the final path.
     normalized.canonicalize().map_err(|_| ServeError::NotFound)
+}
+
+async fn serve_handler(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<HttpServeState>>,
+    axum::extract::Path(path): axum::extract::Path<String>,
+) -> Result<axum::response::Response, ServeError> {
+    let abs = safe_join(&state.path, &path)?;
+    let meta = tokio::fs::symlink_metadata(&abs)
+        .await
+        .map_err(|_| ServeError::NotFound)?;
+    if meta.is_dir() {
+        dir_handler(state, abs).await
+    } else {
+        tracing::info!("Streaming {:?} ({} bytes)", abs, meta.len());
+        Ok(file_response(&abs).await?)
+    }
+}
+
+async fn dir_handler(
+    state: std::sync::Arc<HttpServeState>,
+    abs: std::path::PathBuf,
+) -> Result<axum::response::Response, ServeError> {
+    let index = abs.join("index.html");
+    if tokio::fs::try_exists(&index).await.unwrap_or(false) {
+        if let Ok(meta) = tokio::fs::metadata(&index).await {
+            if meta.is_file() {
+                tracing::info!("Serving {:?} (index.html, {} bytes)", abs, meta.len());
+                return file_response(&index).await;
+            }
+        }
+    }
+    let html = render_listing(&state.path, &abs).await?;
+    let resp = axum::response::Response::builder()
+        .status(axum::http::StatusCode::OK)
+        .header(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .body(axum::body::Body::from(html))
+        .map_err(|e| ServeError::Io(std::io::Error::other(e)))?;
+    Ok(resp)
 }
 
 fn render_breadcrumb(root: &StdPath, current: &StdPath) -> String {
@@ -274,47 +317,18 @@ struct HttpServeState {
 
 pub async fn process_http_serve(path: PathBuf, port: u16) -> Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    info!("Serving {:?} on {}", path, addr);
-
-    let state = HttpServeState { path: path.clone() };
-    // axum router
-    let router = Router::new()
-        .nest_service("/tower", ServeDir::new(path))
-        .route("/*path", get(file_handler))
-        .with_state(Arc::new(state));
-
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, router).await?;
-    Ok(())
+    info!("Serving {:?} on {}", path, listener.local_addr()?);
+    serve(listener, path).await
 }
 
-async fn file_handler(
-    State(state): State<Arc<HttpServeState>>,
-    Path(path): Path<String>,
-) -> (StatusCode, String) {
-    let p = std::path::Path::new(&state.path).join(path);
-    info!("Reading file {:?}", p);
-    if !p.exists() {
-        (
-            StatusCode::NOT_FOUND,
-            format!("File {} note found", p.display()),
-        )
-    } else {
-        // TODO: test p is a directory
-        // if it is a directory, list all files/subdirectories
-        // as <li><a href="/path/to/file">file name</a></li>
-        // <html><body><ul>...</ul></body></html>
-        match tokio::fs::read_to_string(p).await {
-            Ok(content) => {
-                info!("Read {} bytes", content.len());
-                (StatusCode::OK, content)
-            }
-            Err(e) => {
-                warn!("Error reading file: {:?}", e);
-                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-            }
-        }
-    }
+pub async fn serve(listener: tokio::net::TcpListener, path: PathBuf) -> Result<()> {
+    let state = HttpServeState { path };
+    let router = axum::Router::new()
+        .route("/*path", axum::routing::get(serve_handler))
+        .with_state(std::sync::Arc::new(state));
+    axum::serve(listener, router).await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -324,13 +338,58 @@ mod tests {
     use std::path::Path;
 
     #[tokio::test]
-    async fn test_file_handler() {
-        let state = Arc::new(HttpServeState {
-            path: PathBuf::from("."),
-        });
-        let (status, content) = file_handler(State(state), Path("Cargo.toml".to_string())).await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(content.trim().starts_with("[package]"));
+    async fn test_serve_handler_root_lists_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(root.join("a.txt"), b"x").unwrap();
+        let state = std::sync::Arc::new(HttpServeState { path: root.clone() });
+        let resp = serve_handler(
+            axum::extract::State(state),
+            axum::extract::Path("".to_string()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("a.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_serve_handler_traversal_forbidden() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let state = std::sync::Arc::new(HttpServeState { path: root });
+        let resp = serve_handler(
+            axum::extract::State(state),
+            axum::extract::Path("../outside".to_string()),
+        )
+        .await;
+        match resp {
+            Err(ServeError::Forbidden) => {}
+            other => panic!("expected Forbidden, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_serve_handler_index_html_precedence() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(root.join("index.html"), b"<h1>INDEX</h1>").unwrap();
+        std::fs::write(root.join("other.txt"), b"x").unwrap();
+        let state = std::sync::Arc::new(HttpServeState { path: root });
+        let resp = serve_handler(
+            axum::extract::State(state),
+            axum::extract::Path("".to_string()),
+        )
+        .await
+        .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"<h1>INDEX</h1>");
     }
 
     #[test]
