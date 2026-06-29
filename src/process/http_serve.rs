@@ -47,6 +47,54 @@ fn mime_for(path: &StdPath) -> mime::Mime {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
+enum ServeError {
+    NotFound,
+    Forbidden,
+    BadRequest,
+    Io(std::io::Error),
+}
+
+impl From<std::io::Error> for ServeError {
+    fn from(e: std::io::Error) -> Self {
+        ServeError::Io(e)
+    }
+}
+
+#[allow(dead_code)]
+fn safe_join(root: &StdPath, rel: &str) -> Result<PathBuf, ServeError> {
+    let candidate = if rel.is_empty() || rel == "." {
+        root.to_path_buf()
+    } else {
+        root.join(rel)
+    };
+    let canonical_root = root.canonicalize().map_err(|_| ServeError::NotFound)?;
+    // Try canonicalizing the candidate first (handles existing paths, resolves symlinks).
+    if let Ok(canonical_candidate) = candidate.canonicalize() {
+        if !canonical_candidate.starts_with(&canonical_root) {
+            return Err(ServeError::Forbidden);
+        }
+        return Ok(canonical_candidate);
+    }
+    // Candidate does not exist. Normalize both paths by collecting components
+    // (resolves ".." and "." without requiring the target to exist).
+    let normalized: PathBuf = candidate.components().collect();
+    let normalized_root: PathBuf = root.components().collect();
+    if !normalized.starts_with(&normalized_root) {
+        return Err(ServeError::Forbidden);
+    }
+    // Reject any ".." in the relative portion after the root.
+    let rel_part = normalized.strip_prefix(&normalized_root).unwrap();
+    for component in rel_part.components() {
+        if component == std::path::Component::ParentDir {
+            return Err(ServeError::Forbidden);
+        }
+    }
+    // Path is confirmed safe; canonicalize to resolve symlinks and return the final path.
+    normalized.canonicalize().map_err(|_| ServeError::NotFound)
+}
+
+#[derive(Debug)]
 struct HttpServeState {
     path: PathBuf,
 }
@@ -144,5 +192,33 @@ mod tests {
         assert_eq!(mime_for(Path::new("a.pdf")), APPLICATION_PDF);
         assert_eq!(mime_for(Path::new("a.unknown")), APPLICATION_OCTET_STREAM);
         assert_eq!(mime_for(Path::new("a")), APPLICATION_OCTET_STREAM);
+    }
+
+    #[test]
+    fn test_safe_join_basic() {
+        let root = PathBuf::from(".");
+        let p = safe_join(&root, "Cargo.toml").expect("file exists");
+        assert!(p.ends_with("Cargo.toml"));
+        assert_eq!(safe_join(&root, "").unwrap(), root.canonicalize().unwrap());
+        assert_eq!(safe_join(&root, ".").unwrap(), root.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_safe_join_traversal() {
+        let root = PathBuf::from(".");
+        match safe_join(&root, "../outside-target") {
+            Err(ServeError::Forbidden) => {}
+            other => panic!("expected Forbidden, got {:?}", other),
+        }
+        match safe_join(&root, "src/../../../etc/passwd") {
+            Err(ServeError::Forbidden) => {}
+            other => panic!("expected Forbidden, got {:?}", other),
+        }
+        match safe_join(&root, "does-not-exist") {
+            Err(ServeError::NotFound) => {}
+            other => panic!("expected NotFound, got {:?}", other),
+        }
+        // sanity: a real subdir still resolves
+        assert!(safe_join(&root, "src").is_ok());
     }
 }
