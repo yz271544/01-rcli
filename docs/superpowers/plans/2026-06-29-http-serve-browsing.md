@@ -766,7 +766,7 @@ async fn serve_handler(
 }
 
 async fn dir_handler(
-    _state: std::sync::Arc<HttpServeState>,
+    state: std::sync::Arc<HttpServeState>,
     abs: PathBuf,
 ) -> Result<axum::response::Response, ServeError> {
     let index = abs.join("index.html");
@@ -778,7 +778,7 @@ async fn dir_handler(
             }
         }
     }
-    let html = render_listing(&abs.parent().unwrap_or(&abs), &abs).await?;
+    let html = render_listing(&state.path, &abs).await?;
     let resp = axum::response::Response::builder()
         .status(axum::http::StatusCode::OK)
         .header(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")
@@ -875,7 +875,7 @@ Expected: all unit tests pass; in particular `test_serve_handler_root_lists_dir`
 - [ ] **Step 6: Run clippy and fix warnings**
 
 Run: `cargo clippy --tests -- -D warnings`
-Expected: no warnings. If `clippy` complains about `dir_handler`'s `_state` parameter being unused, change the signature to `_state: std::sync::Arc<HttpServeState>` (already prefixed with `_`); if it complains about `chrono::DateTime::from_timestamp` returning `Option`, the code already handles it.
+Expected: no warnings. If `clippy` complains about `chrono::DateTime::from_timestamp` returning `Option`, the code already handles it.
 
 - [ ] **Step 7: Commit**
 
@@ -1167,3 +1167,4 @@ git commit -m "chore: update changelog for http serve browsing"
 - **Placeholders:** none. Every code block is complete.
 - **Type consistency:** `HttpServeState`, `ServeError`, `serve_handler`, `dir_handler`, `file_response`, `safe_join`, `render_listing`, `render_breadcrumb`, `mime_for`, `html_escape`, `human_size` are all defined where they are first referenced, and their signatures are reused identically in later tasks. `serve` is exposed `pub` in Task 8 and re-imported in Task 9 under `rcli::process::http_serve::serve`.
 - **One known issue caught during self-review:** the integration test in Task 9 originally imported `HttpServeState` but does not use it. Step 3 of Task 9 removes that import. The unit tests in Task 8 still construct `HttpServeState` directly and need the type to be `pub`-visible inside the crate, which it already is.
+- **Bug caught and fixed during self-review:** the original Task 8 `dir_handler` called `render_listing(&abs.parent().unwrap_or(&abs), &abs)`, but `render_listing(root, current)` expects `root` to be the served root. Passing `abs.parent()` would have produced breadcrumbs starting from `/` instead of the user's serve directory. Fixed to pass `&state.path` and renamed the `_state` parameter to `state` so it is actually used.
