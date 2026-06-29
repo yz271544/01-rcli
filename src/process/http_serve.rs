@@ -5,7 +5,7 @@ use axum::{
     routing::get,
     Router,
 };
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, path::Path as StdPath, path::PathBuf, sync::Arc};
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
 
@@ -39,6 +39,11 @@ fn html_escape(s: &str) -> String {
         }
     }
     out
+}
+
+#[allow(dead_code)]
+fn mime_for(path: &StdPath) -> mime::Mime {
+    mime_guess::from_path(path).first_or_octet_stream()
 }
 
 #[derive(Debug)]
@@ -94,6 +99,8 @@ async fn file_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mime::{APPLICATION_OCTET_STREAM, APPLICATION_PDF, IMAGE_JPEG, IMAGE_PNG, TEXT_HTML};
+    use std::path::Path;
 
     #[tokio::test]
     async fn test_file_handler() {
@@ -127,5 +134,15 @@ mod tests {
         assert_eq!(human_size(1024u64.pow(4)), "1.00 TiB");
         assert_eq!(human_size(1024u64.pow(5)), "1.00 PiB");
         assert_eq!(human_size(1024u64.pow(6)), "1024.00 PiB");
+    }
+
+    #[test]
+    fn test_mime_for() {
+        assert_eq!(mime_for(Path::new("a.html")), TEXT_HTML);
+        assert_eq!(mime_for(Path::new("a.png")), IMAGE_PNG);
+        assert_eq!(mime_for(Path::new("a.jpg")), IMAGE_JPEG);
+        assert_eq!(mime_for(Path::new("a.pdf")), APPLICATION_PDF);
+        assert_eq!(mime_for(Path::new("a.unknown")), APPLICATION_OCTET_STREAM);
+        assert_eq!(mime_for(Path::new("a")), APPLICATION_OCTET_STREAM);
     }
 }

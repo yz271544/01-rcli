@@ -1445,6 +1445,7 @@ dependencies = [
  "csv",
  "ed25519-dalek",
  "enum_dispatch",
+ "mime",
  "mime_guess",
  "rand 0.8.6",
  "reqwest",
