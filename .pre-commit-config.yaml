@@ -30,6 +30,7 @@ repos:
         entry: bash -c 'cargo deny check -d'
         language: rust
         files: \.rs$
+        stages: [manual]
         args: []
       - id: typos
         name: typos

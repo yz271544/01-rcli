@@ -1,6 +1,6 @@
 use crate::{
     get_content, get_reader, process_text_key_generate, process_text_sign, process_text_verify,
-    CmdExector,
+    CmdExecutor,
 };
 
 use super::{verify_file, verify_path};
@@ -11,7 +11,7 @@ use std::{fmt, path::PathBuf, str::FromStr};
 use tokio::fs;
 
 #[derive(Debug, Parser)]
-#[enum_dispatch(CmdExector)]
+#[enum_dispatch(CmdExecutor)]
 pub enum TextSubCommand {
     #[command(about = "Sign a text with a private/session key and return a signature")]
     Sign(TextSignOpts),
@@ -88,7 +88,7 @@ impl fmt::Display for TextSignFormat {
     }
 }
 
-impl CmdExector for TextSignOpts {
+impl CmdExecutor for TextSignOpts {
     async fn execute(self) -> anyhow::Result<()> {
         let mut reader = get_reader(&self.input)?;
         let key = get_content(&self.key)?;
@@ -100,7 +100,7 @@ impl CmdExector for TextSignOpts {
     }
 }
 
-impl CmdExector for TextVerifyOpts {
+impl CmdExecutor for TextVerifyOpts {
     async fn execute(self) -> anyhow::Result<()> {
         let mut reader = get_reader(&self.input)?;
         let key = get_content(&self.key)?;
@@ -115,7 +115,7 @@ impl CmdExector for TextVerifyOpts {
     }
 }
 
-impl CmdExector for KeyGenerateOpts {
+impl CmdExecutor for KeyGenerateOpts {
     async fn execute(self) -> anyhow::Result<()> {
         let key = process_text_key_generate(self.format)?;
         for (k, v) in key {
