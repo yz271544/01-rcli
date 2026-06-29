@@ -1,11 +1,14 @@
 use anyhow::Result;
 use axum::{
+    body::Body,
     extract::{Path, State},
     http::StatusCode,
+    response::Response,
     routing::get,
     Router,
 };
 use std::{net::SocketAddr, path::Path as StdPath, path::PathBuf, sync::Arc};
+use tokio_util::io::ReaderStream;
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
 
@@ -44,6 +47,22 @@ fn html_escape(s: &str) -> String {
 #[allow(dead_code)]
 fn mime_for(path: &StdPath) -> mime::Mime {
     mime_guess::from_path(path).first_or_octet_stream()
+}
+
+#[allow(dead_code)]
+async fn file_response(path: &StdPath) -> Result<Response, ServeError> {
+    let meta = tokio::fs::metadata(path).await?;
+    let len = meta.len();
+    let file = tokio::fs::File::open(path).await?;
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+    let resp = Response::builder()
+        .status(StatusCode::OK)
+        .header(axum::http::header::CONTENT_TYPE, mime_for(path).to_string())
+        .header(axum::http::header::CONTENT_LENGTH, len)
+        .body(body)
+        .map_err(|e| ServeError::Io(std::io::Error::other(e)))?;
+    Ok(resp)
 }
 
 #[derive(Debug)]
@@ -419,5 +438,63 @@ mod tests {
         assert!(html.contains("href=\"/sub/\""));
         // size column header present
         assert!(html.contains("Size"));
+    }
+
+    #[tokio::test]
+    async fn test_file_response_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("hello.txt");
+        std::fs::write(&p, b"hello world").unwrap();
+        let resp = file_response(&p).await.unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "text/plain"
+        );
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_LENGTH)
+                .unwrap(),
+            "11"
+        );
+        let body = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+        assert_eq!(&body[..], b"hello world");
+    }
+
+    #[tokio::test]
+    async fn test_file_response_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("blob.bin");
+        let payload: Vec<u8> = (0u8..=255).cycle().take(1024).collect();
+        std::fs::write(&p, &payload).unwrap();
+        let resp = file_response(&p).await.unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_LENGTH)
+                .unwrap(),
+            "1024"
+        );
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        assert_eq!(body.len(), 1024);
+        assert_eq!(&body[..], &payload[..]);
+    }
+
+    #[tokio::test]
+    async fn test_file_response_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("missing.txt");
+        match file_response(&p).await {
+            Err(ServeError::Io(_)) => {}
+            other => panic!("expected Io error, got {:?}", other),
+        }
     }
 }
