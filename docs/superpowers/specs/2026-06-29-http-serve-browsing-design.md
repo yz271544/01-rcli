@@ -99,6 +99,7 @@ Only `Cargo.toml` and `src/process/http_serve.rs` change. `src/cli/` is untouche
   - `dir_handler(State, Path) -> Result<Response, ServeError>`
   - `render_listing(root: &Path, current: &Path) -> Result<String, ServeError>`
   - `render_breadcrumb(root: &Path, current: &Path) -> String`
+  - `mime_for(abs: &Path) -> mime::Mime`
   - `html_escape(s: &str) -> Cow<'_, str>`
   - `human_size(bytes: u64) -> String`
 
@@ -157,6 +158,10 @@ GET /some/path
 - Resolve via `safe_join`.
 - Probe `<abs>/index.html`; if it exists and is a regular file, delegate to `file_response`.
 - Otherwise, render the listing.
+
+### `mime_for(abs) -> mime::Mime`
+
+Thin wrapper around `mime_guess::from_path(abs).first_or_octet_stream()`. Centralises the fallback so the rule lives in one place.
 
 ### `html_escape(s) -> Cow<'_, str>`
 
