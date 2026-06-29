@@ -9,6 +9,22 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tower_http::services::ServeDir;
 use tracing::{info, warn};
 
+#[allow(dead_code)]
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 #[derive(Debug)]
 struct HttpServeState {
     path: PathBuf,
@@ -71,5 +87,15 @@ mod tests {
         let (status, content) = file_handler(State(state), Path("Cargo.toml".to_string())).await;
         assert_eq!(status, StatusCode::OK);
         assert!(content.trim().starts_with("[package]"));
+    }
+
+    #[test]
+    fn test_html_escape() {
+        assert_eq!(html_escape("plain"), "plain");
+        assert_eq!(html_escape("<script>"), "&lt;script&gt;");
+        assert_eq!(html_escape("a & b"), "a &amp; b");
+        assert_eq!(html_escape("\"quoted\""), "&quot;quoted&quot;");
+        assert_eq!(html_escape("it's"), "it&#39;s");
+        assert_eq!(html_escape("a<>\"'&b"), "a&lt;&gt;&quot;&#39;&amp;b");
     }
 }
