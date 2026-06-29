@@ -10,6 +10,22 @@ use tower_http::services::ServeDir;
 use tracing::{info, warn};
 
 #[allow(dead_code)]
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+    let mut value = bytes as f64;
+    let mut idx = 0;
+    while value >= 1024.0 && idx < UNITS.len() - 1 {
+        value /= 1024.0;
+        idx += 1;
+    }
+    if idx == 0 {
+        format!("{} B", bytes)
+    } else {
+        format!("{:.2} {}", value, UNITS[idx])
+    }
+}
+
+#[allow(dead_code)]
 fn html_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
@@ -97,5 +113,19 @@ mod tests {
         assert_eq!(html_escape("\"quoted\""), "&quot;quoted&quot;");
         assert_eq!(html_escape("it's"), "it&#39;s");
         assert_eq!(html_escape("a<>\"'&b"), "a&lt;&gt;&quot;&#39;&amp;b");
+    }
+
+    #[test]
+    fn test_human_size() {
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(512), "512 B");
+        assert_eq!(human_size(1023), "1023 B");
+        assert_eq!(human_size(1024), "1.00 KiB");
+        assert_eq!(human_size(1536), "1.50 KiB");
+        assert_eq!(human_size(1024 * 1024), "1.00 MiB");
+        assert_eq!(human_size(1024u64.pow(3)), "1.00 GiB");
+        assert_eq!(human_size(1024u64.pow(4)), "1.00 TiB");
+        assert_eq!(human_size(1024u64.pow(5)), "1.00 PiB");
+        assert_eq!(human_size(1024u64.pow(6)), "1024.00 PiB");
     }
 }
