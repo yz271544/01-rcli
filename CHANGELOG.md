@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file. See [conven
 ---
 ## [unreleased]
 
+### Features
+
+- add directory browsing and binary download support to http serve - ([15acb63](https://github.com/tyr-rust-bootcamp/01-rcli/commit/15acb63))
+
 ### Miscellaneous Chores
 
 - add excalidraws - ([41e31bf](https://github.com/tyr-rust-bootcamp/01-rcli/commit/41e31bff33fecba5fa99ef1d0e780ac9726952e5)) - Tyr Chen
