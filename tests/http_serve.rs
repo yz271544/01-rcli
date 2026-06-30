@@ -128,7 +128,7 @@ async fn integration_index_html_takes_precedence() {
 }
 
 #[tokio::test]
-async fn integration_traversal_returns_403() {
+async fn integration_traversal_normalized_404() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().to_path_buf();
 
