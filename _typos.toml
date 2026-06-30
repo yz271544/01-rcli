@@ -1,4 +1,5 @@
 [default.extend-words]
+Iy = "Iy"
 
 [files]
-extend-exclude = ["CHANGELOG.md", "docs/*", "fixtures/b64.txt"]
+extend-exclude = ["CHANGELOG.md", "docs/*", "fixtures/b64.txt", "deny.toml"]
