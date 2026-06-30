@@ -76,10 +76,22 @@ impl axum::response::IntoResponse for ServeError {
     fn into_response(self) -> axum::response::Response {
         use axum::http::StatusCode;
         let (status, msg) = match self {
-            ServeError::NotFound => (StatusCode::NOT_FOUND, "Not Found"),
-            ServeError::Forbidden => (StatusCode::FORBIDDEN, "Forbidden"),
-            ServeError::BadRequest => (StatusCode::BAD_REQUEST, "Bad Request"),
-            ServeError::Io(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
+            ServeError::NotFound => {
+                tracing::warn!("ServeError: NotFound");
+                (StatusCode::NOT_FOUND, "Not Found")
+            }
+            ServeError::Forbidden => {
+                tracing::warn!("ServeError: Forbidden");
+                (StatusCode::FORBIDDEN, "Forbidden")
+            }
+            ServeError::BadRequest => {
+                tracing::warn!("ServeError: BadRequest");
+                (StatusCode::BAD_REQUEST, "Bad Request")
+            }
+            ServeError::Io(ref e) => {
+                tracing::error!("ServeError: Io({})", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+            }
         };
         (status, msg).into_response()
     }
@@ -246,19 +258,12 @@ async fn collect_entries(dir: &StdPath) -> Result<Vec<ListingEntry>, ServeError>
 }
 
 fn render_entry_row(parent_href: &str, e: &ListingEntry) -> String {
-    let href = if e.is_dir {
-        format!(
-            "{}/{}/",
-            parent_href.trim_end_matches('/'),
-            html_escape(&e.name)
-        )
-    } else {
-        format!(
-            "{}/{}",
-            parent_href.trim_end_matches('/'),
-            html_escape(&e.name)
-        )
-    };
+    let href = format!(
+        "{}/{}{}",
+        parent_href.trim_end_matches('/'),
+        html_escape(&e.name),
+        if e.is_dir { "/" } else { "" }
+    );
     let size = match (e.is_dir, e.size) {
         (true, _) => "—".to_string(),
         (false, Some(s)) => human_size(s),
