@@ -87,35 +87,54 @@ impl axum::response::IntoResponse for ServeError {
 
 #[allow(dead_code)]
 fn safe_join(root: &StdPath, rel: &str) -> Result<PathBuf, ServeError> {
-    let candidate = if rel.is_empty() || rel == "." {
-        root.to_path_buf()
-    } else {
-        root.join(rel)
-    };
     let canonical_root = root.canonicalize().map_err(|_| ServeError::NotFound)?;
-    // Try canonicalizing the candidate first (handles existing paths, resolves symlinks).
-    if let Ok(canonical_candidate) = candidate.canonicalize() {
-        if !canonical_candidate.starts_with(&canonical_root) {
-            return Err(ServeError::Forbidden);
-        }
-        return Ok(canonical_candidate);
+    if rel.is_empty() || rel == "." {
+        return Ok(canonical_root);
     }
-    // Candidate does not exist. Normalize both paths by collecting components
-    // (resolves ".." and "." without requiring the target to exist).
+    // Track depth relative to canonical root to catch ".." traversal.
+    // This is necessary because PathBuf::components() resolves ".." away, so
+    // a naive starts_with check can pass for "/parent/child" when the root
+    // is "/parent/child/grandchild" (since "/parent/child" starts with "/parent").
+    let mut depth: isize = 0;
+    for seg in rel.split('/') {
+        if seg.is_empty() {
+            continue;
+        } else if seg == "." {
+            // no-op
+        } else if seg == ".." {
+            depth -= 1;
+            if depth < 0 {
+                return Err(ServeError::Forbidden);
+            }
+        } else {
+            depth += 1;
+        }
+    }
+    // After processing, if depth is still 0 or negative, the path tried to
+    // escape above the root and should have been rejected above.
+    // Now construct the candidate by joining to canonical_root.
+    let candidate = canonical_root.join(rel);
     let normalized: PathBuf = candidate.components().collect();
-    let normalized_root: PathBuf = root.components().collect();
-    if !normalized.starts_with(&normalized_root) {
+    if !normalized.starts_with(&canonical_root) {
         return Err(ServeError::Forbidden);
     }
-    // Reject any ".." in the relative portion after the root.
-    let rel_part = normalized.strip_prefix(&normalized_root).unwrap();
-    for component in rel_part.components() {
-        if component == std::path::Component::ParentDir {
-            return Err(ServeError::Forbidden);
-        }
+    // Canonicalize to resolve symlinks. After canonicalization, re-check that
+    // the resolved path is still inside the canonical root. This catches
+    // symlink escapes (e.g. root/sub -> /etc, requesting /sub -> /etc).
+    let final_path = normalized
+        .canonicalize()
+        .map_err(|_| ServeError::NotFound)?;
+    if !final_path.starts_with(&canonical_root) {
+        return Err(ServeError::Forbidden);
     }
-    // Path is confirmed safe; canonicalize to resolve symlinks and return the final path.
-    normalized.canonicalize().map_err(|_| ServeError::NotFound)
+    Ok(final_path)
+}
+
+async fn serve_root_handler(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<HttpServeState>>,
+) -> Result<axum::response::Response, ServeError> {
+    let abs = safe_join(&state.path, "")?;
+    dir_handler(state, abs).await
 }
 
 async fn serve_handler(
@@ -325,6 +344,7 @@ pub async fn process_http_serve(path: PathBuf, port: u16) -> Result<()> {
 pub async fn serve(listener: tokio::net::TcpListener, path: PathBuf) -> Result<()> {
     let state = HttpServeState { path };
     let router = axum::Router::new()
+        .route("/", axum::routing::get(serve_root_handler))
         .route("/*path", axum::routing::get(serve_handler))
         .with_state(std::sync::Arc::new(state));
     axum::serve(listener, router).await?;
